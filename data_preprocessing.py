@@ -153,6 +153,9 @@ class MultiNLIPreprocessor:
                       save_validation_files: bool = True) -> Dict[str, Dataset]:
         """Create datasets using HuggingFace MultiNLI data and save validation files."""
         
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
         # Load all data from HuggingFace
         hf_data = self.load_multinli_from_hf()
         
