@@ -11,4 +11,6 @@ pandas>=2.0.0
 tqdm>=4.65.0
 wandb>=0.15.0
 evaluate>=0.4.0
-packaging>=21.0 
+packaging>=21.0
+matplotlib>=3.7.0
+seaborn>=0.12.0 
