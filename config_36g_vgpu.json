@@ -1,0 +1,43 @@
+{
+  "model_name": "gpt2-large",
+  "max_length": 512,
+  
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.1,
+  "target_modules": ["c_attn", "c_proj", "c_fc"],
+  
+  "num_epochs": 2,
+  "train_batch_size": 6,
+  "eval_batch_size": 12,
+  "gradient_accumulation_steps": 6,
+  "learning_rate": 1e-4,
+  "weight_decay": 0.01,
+  "max_grad_norm": 1.0,
+  
+  "use_fp16": true,
+  "gradient_checkpointing": true,
+  
+  "logging_steps": 100,
+  "eval_steps": 500,
+  "save_steps": 500,
+  "save_total_limit": 3,
+  "early_stopping_patience": 5,
+  
+  "data_dir": "./processed_data",
+  "output_dir": "./gpt2_lora_multinli_36g",
+  
+  "seed": 42,
+  "use_wandb": false,
+  
+  "_comments": {
+    "effective_batch_size": "6 * 6 = 36 (optimized for 36G vGPU)",
+    "memory_optimization": "FP16 + gradient checkpointing enabled",
+    "lora_config": "Rank 16 with alpha 32 for good performance/efficiency balance",
+    "target_modules": "GPT2 attention and MLP layers for comprehensive adaptation",
+    "training_data": "Uses 50K samples from MultiNLI training set (configured in preprocessing)",
+    "evaluation_data": "Uses local dev files for matched/mismatched evaluation",
+    "training_adjustments": "Reduced epochs to 2 and LR to 1e-4 for better training with real data",
+    "eval_frequency": "Less frequent evaluation (every 500 steps) due to larger dataset"
+  }
+} 
