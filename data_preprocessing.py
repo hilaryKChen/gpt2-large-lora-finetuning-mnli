@@ -115,6 +115,9 @@ class MultiNLIPreprocessor:
         """Save validation data as JSONL files for future use."""
         import json
         
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
         for split_name, data in validation_data.items():
             if 'validation' in split_name:
                 # Convert back to original format for saving
