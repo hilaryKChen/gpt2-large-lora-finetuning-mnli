@@ -256,7 +256,7 @@ def get_default_config() -> Dict[str, Any]:
         
         # Misc
         'seed': 42,
-        'use_wandb': True,
+        'use_wandb': False,
     }
 
 def main():
@@ -294,8 +294,11 @@ def main():
         'num_epochs': args.num_epochs,
         'learning_rate': args.learning_rate,
         'train_batch_size': args.train_batch_size,
-        'use_wandb': not args.no_wandb,
     })
+    
+    # Only override wandb setting if explicitly requested
+    if args.no_wandb:
+        config['use_wandb'] = False
     
     # Initialize wandb if enabled
     if config['use_wandb']:
