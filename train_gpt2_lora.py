@@ -112,7 +112,8 @@ class GPT2LoRATrainer:
         )
         
         # For causal LM, labels are the same as input_ids
-        tokenized['labels'] = tokenized['input_ids'].copy()
+        # Use list comprehension to ensure proper format
+        tokenized['labels'] = [input_ids[:] for input_ids in tokenized['input_ids']]
         
         return tokenized
     
@@ -122,10 +123,13 @@ class GPT2LoRATrainer:
         
         for split_name, dataset in datasets.items():
             logger.info(f"Tokenizing {split_name} dataset...")
+            # Remove only the original text columns, keep tokenized ones
+            columns_to_remove = [col for col in dataset.column_names 
+                               if col not in ['input_ids', 'attention_mask', 'labels']]
             tokenized_dataset = dataset.map(
                 self.tokenize_function,
                 batched=True,
-                remove_columns=dataset.column_names,
+                remove_columns=columns_to_remove,
                 desc=f"Tokenizing {split_name}"
             )
             processed_datasets[split_name] = tokenized_dataset
@@ -151,6 +155,7 @@ class GPT2LoRATrainer:
         data_collator = DataCollatorForLanguageModeling(
             tokenizer=self.tokenizer,
             mlm=False,  # We're doing causal LM, not masked LM
+            pad_to_multiple_of=8,  # For efficiency
         )
         
         # Prepare training arguments with compatibility handling
