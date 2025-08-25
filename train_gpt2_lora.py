@@ -21,6 +21,9 @@ from transformers import (
     DataCollatorForLanguageModeling,
     EarlyStoppingCallback
 )
+import torch
+from dataclasses import dataclass
+from typing import Dict, List, Any
 from peft import (
     LoraConfig, 
     get_peft_model, 
@@ -33,6 +36,18 @@ import wandb
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+@dataclass
+class SimpleDataCollator:
+    """Simple data collator for pre-padded sequences."""
+    
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        # Convert lists to tensors
+        batch = {}
+        for key in features[0].keys():
+            if key in ['input_ids', 'attention_mask', 'labels']:
+                batch[key] = torch.tensor([f[key] for f in features], dtype=torch.long)
+        return batch
 
 class GPT2LoRATrainer:
     def __init__(self, config: Dict[str, Any]):
@@ -102,18 +117,23 @@ class GPT2LoRATrainer:
     
     def tokenize_function(self, examples):
         """Tokenize the input text for training."""
-        # Tokenize the text
+        # Tokenize the text with padding to max_length for consistency
         tokenized = self.tokenizer(
             examples['text'],
             truncation=True,
-            padding=False,
+            padding='max_length',
             max_length=self.config['max_length'],
             return_tensors=None
         )
         
         # For causal LM, labels are the same as input_ids
-        # Use list comprehension to ensure proper format
-        tokenized['labels'] = [input_ids[:] for input_ids in tokenized['input_ids']]
+        # Clone the input_ids for labels
+        import copy
+        tokenized['labels'] = copy.deepcopy(tokenized['input_ids'])
+        
+        # Debug: Check the first example in batch
+        if len(tokenized['input_ids']) > 0:
+            logger.info(f"Sample tokenized lengths: input_ids={len(tokenized['input_ids'][0])}, labels={len(tokenized['labels'][0])}")
         
         return tokenized
     
@@ -151,12 +171,8 @@ class GPT2LoRATrainer:
         datasets = self.load_datasets()
         tokenized_datasets = self.prepare_datasets(datasets)
         
-        # Data collator
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=self.tokenizer,
-            mlm=False,  # We're doing causal LM, not masked LM
-            pad_to_multiple_of=8,  # For efficiency
-        )
+        # Use simple data collator for pre-padded sequences
+        data_collator = SimpleDataCollator()
         
         # Prepare training arguments with compatibility handling
         training_args_dict = {
