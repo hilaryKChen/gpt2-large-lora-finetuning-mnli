@@ -134,6 +134,12 @@ class GPT2LoRATrainer:
     
     def train(self):
         """Main training loop."""
+        # Disable wandb if not requested
+        if not self.config.get('use_wandb', False):
+            import os
+            os.environ['WANDB_DISABLED'] = 'true'
+            os.environ['WANDB_MODE'] = 'disabled'
+        
         # Setup model and tokenizer
         self.setup_model_and_tokenizer()
         
@@ -184,7 +190,7 @@ class GPT2LoRATrainer:
             "greater_is_better": False,
             
             # Reporting
-            "report_to": "wandb" if self.config['use_wandb'] else None,
+            "report_to": "wandb" if self.config['use_wandb'] else [],
             "run_name": f"gpt2-large-lora-multinli-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
             
             # Misc
@@ -272,6 +278,12 @@ def get_default_config() -> Dict[str, Any]:
     }
 
 def main():
+    # Disable wandb by default to prevent auto-initialization
+    import os
+    if 'WANDB_DISABLED' not in os.environ:
+        os.environ['WANDB_DISABLED'] = 'true'
+        os.environ['WANDB_MODE'] = 'disabled'
+    
     parser = argparse.ArgumentParser(description="Fine-tune GPT2-large with LoRA on MultiNLI")
     parser.add_argument("--config", type=str, help="Path to JSON config file")
     parser.add_argument("--data_dir", type=str, default="./processed_data", 
@@ -313,12 +325,20 @@ def main():
         config['use_wandb'] = False
     
     # Initialize wandb if enabled
-    if config['use_wandb']:
+    if config.get('use_wandb', False):
+        # Re-enable wandb for this run
+        os.environ['WANDB_DISABLED'] = 'false'
+        os.environ['WANDB_MODE'] = 'online'
+        
         wandb.init(
             project="gpt2-lora-multinli",
             config=config,
             name=f"gpt2-large-lora-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         )
+    else:
+        # Ensure wandb stays disabled
+        os.environ['WANDB_DISABLED'] = 'true'
+        os.environ['WANDB_MODE'] = 'disabled'
     
     # Create output directory
     os.makedirs(config['output_dir'], exist_ok=True)
@@ -335,7 +355,7 @@ def main():
     trainer = GPT2LoRATrainer(config)
     trainer.train()
     
-    if config['use_wandb']:
+    if config.get('use_wandb', False):
         wandb.finish()
 
 if __name__ == "__main__":
