@@ -26,6 +26,21 @@ import seaborn as sns
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def convert_numpy_types(obj):
+    """Convert numpy types to native Python types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
+
 class GPT2LoRAEvaluator:
     def __init__(self, model_path: str, base_model_name: str = "gpt2-large"):
         self.model_path = model_path
@@ -210,6 +225,9 @@ class GPT2LoRAEvaluator:
         results_clean = {k: v for k, v in results.items() 
                         if k not in ['predictions', 'true_labels']}
         
+        # Convert numpy types to native Python types for JSON serialization
+        results_clean = convert_numpy_types(results_clean)
+        
         output_path = os.path.join(output_dir, f'results_{results["dataset_name"]}.json')
         with open(output_path, 'w') as f:
             json.dump(results_clean, f, indent=2)
@@ -302,6 +320,9 @@ def main():
     combined_results = {k: {kk: vv for kk, vv in v.items() 
                            if kk not in ['predictions', 'true_labels']} 
                        for k, v in all_results.items()}
+    
+    # Convert numpy types for JSON serialization
+    combined_results = convert_numpy_types(combined_results)
     
     with open(combined_results_path, 'w') as f:
         json.dump(combined_results, f, indent=2)
