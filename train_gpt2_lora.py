@@ -147,51 +147,63 @@ class GPT2LoRATrainer:
             mlm=False,  # We're doing causal LM, not masked LM
         )
         
-        # Training arguments optimized for 36G vGPU
-        training_args = TrainingArguments(
-            output_dir=self.config['output_dir'],
-            overwrite_output_dir=True,
+        # Prepare training arguments with compatibility handling
+        training_args_dict = {
+            "output_dir": self.config['output_dir'],
+            "overwrite_output_dir": True,
             
             # Training parameters
-            num_train_epochs=self.config['num_epochs'],
-            per_device_train_batch_size=self.config['train_batch_size'],
-            per_device_eval_batch_size=self.config['eval_batch_size'],
-            gradient_accumulation_steps=self.config['gradient_accumulation_steps'],
+            "num_train_epochs": self.config['num_epochs'],
+            "per_device_train_batch_size": self.config['train_batch_size'],
+            "per_device_eval_batch_size": self.config['eval_batch_size'],
+            "gradient_accumulation_steps": self.config['gradient_accumulation_steps'],
             
             # Optimization
-            learning_rate=self.config['learning_rate'],
-            weight_decay=self.config['weight_decay'],
-            adam_beta1=0.9,
-            adam_beta2=0.999,
-            adam_epsilon=1e-8,
-            max_grad_norm=self.config['max_grad_norm'],
+            "learning_rate": self.config['learning_rate'],
+            "weight_decay": self.config['weight_decay'],
+            "adam_beta1": 0.9,
+            "adam_beta2": 0.999,
+            "adam_epsilon": 1e-8,
+            "max_grad_norm": self.config['max_grad_norm'],
             
             # Memory optimization
-            fp16=self.config['use_fp16'],
-            dataloader_pin_memory=False,
-            gradient_checkpointing=self.config['gradient_checkpointing'],
+            "fp16": self.config['use_fp16'],
+            "dataloader_pin_memory": False,
+            "gradient_checkpointing": self.config['gradient_checkpointing'],
             
             # Logging and evaluation
-            logging_steps=self.config['logging_steps'],
-            eval_steps=self.config['eval_steps'],
-            evaluation_strategy="steps",
-            save_steps=self.config['save_steps'],
-            save_strategy="steps",
-            save_total_limit=self.config['save_total_limit'],
+            "logging_steps": self.config['logging_steps'],
+            "eval_steps": self.config['eval_steps'],
+            "save_steps": self.config['save_steps'],
+            "save_strategy": "steps",
+            "save_total_limit": self.config['save_total_limit'],
             
             # Early stopping
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
+            "load_best_model_at_end": True,
+            "metric_for_best_model": "eval_loss",
+            "greater_is_better": False,
             
             # Reporting
-            report_to="wandb" if self.config['use_wandb'] else None,
-            run_name=f"gpt2-large-lora-multinli-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+            "report_to": "wandb" if self.config['use_wandb'] else None,
+            "run_name": f"gpt2-large-lora-multinli-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
             
             # Misc
-            seed=self.config['seed'],
-            remove_unused_columns=False,
-        )
+            "seed": self.config['seed'],
+            "remove_unused_columns": False,
+        }
+        
+        # Handle evaluation_strategy vs eval_strategy compatibility
+        import transformers
+        from packaging import version
+        
+        # Check transformers version and use appropriate parameter name
+        if version.parse(transformers.__version__) >= version.parse("4.34.0"):
+            training_args_dict["eval_strategy"] = "steps"
+        else:
+            training_args_dict["evaluation_strategy"] = "steps"
+        
+        # Create TrainingArguments
+        training_args = TrainingArguments(**training_args_dict)
         
         # Initialize trainer
         trainer = Trainer(
