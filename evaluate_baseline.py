@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""
+Baseline evaluation script for pretrained GPT2-large on MultiNLI dataset.
+Evaluates the model without any fine-tuning to establish baseline performance.
+"""
+
+import os
+import json
+import torch
+import argparse
+import logging
+from typing import Dict, List, Any, Tuple
+import numpy as np
+from tqdm import tqdm
+
+import transformers
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from datasets import load_from_disk, Dataset
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def convert_numpy_types(obj):
+    """Convert numpy types to native Python types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
+
+class GPT2BaselineEvaluator:
+    def __init__(self, model_name: str = "gpt2-large"):
+        self.model_name = model_name
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Initialize tokenizer and model
+        self.tokenizer = None
+        self.model = None
+        self.label_map = {'entailment': 0, 'contradiction': 1, 'neutral': 2}
+        self.reverse_label_map = {v: k for k, v in self.label_map.items()}
+        
+        logger.info(f"Using device: {self.device}")
+        
+    def load_model(self):
+        """Load the pretrained GPT2-large model and tokenizer."""
+        logger.info(f"Loading pretrained {self.model_name} tokenizer...")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+        logger.info(f"Loading pretrained {self.model_name} model...")
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
+        self.model.eval()
+        
+        logger.info("Pretrained model loaded successfully!")
+        
+    def format_nli_prompt(self, premise: str, hypothesis: str) -> str:
+        """Format NLI data into the same prompt format used during training."""
+        return f"Premise: {premise}\nHypothesis: {hypothesis}\nRelationship:"
+        
+    def predict_single(self, premise: str, hypothesis: str, max_new_tokens: int = 10) -> str:
+        """Predict the relationship for a single premise-hypothesis pair using pretrained model."""
+        prompt = self.format_nli_prompt(premise, hypothesis)
+        
+        # Tokenize input
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512
+        ).to(self.device)
+        
+        # Generate prediction
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                temperature=1.0,
+                pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
+            
+        # Decode the generated text
+        generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Extract the prediction (everything after "Relationship:")
+        if "Relationship:" in generated_text:
+            prediction = generated_text.split("Relationship:")[-1].strip()
+            # Extract just the first word (the label)
+            prediction = prediction.split()[0].lower() if prediction.split() else ""
+            
+            # Map to valid labels with more flexible matching
+            if prediction in self.label_map:
+                return prediction
+            elif "entail" in prediction or "yes" in prediction or "true" in prediction:
+                return "entailment"
+            elif "contradict" in prediction or "no" in prediction or "false" in prediction:
+                return "contradiction"
+            elif "neutral" in prediction or "maybe" in prediction or "unknown" in prediction:
+                return "neutral"
+            else:
+                # For baseline, if unclear, default to neutral (most conservative)
+                return "neutral"
+        else:
+            return "neutral"  # Default fallback
+            
+    def evaluate_dataset(self, dataset: Dataset, dataset_name: str) -> Dict[str, Any]:
+        """Evaluate the pretrained model on a dataset and return metrics."""
+        logger.info(f"Evaluating pretrained model on {dataset_name} dataset ({len(dataset)} samples)...")
+        
+        predictions = []
+        true_labels = []
+        
+        # Evaluate each sample
+        for i, sample in enumerate(tqdm(dataset, desc=f"Evaluating {dataset_name}")):
+            premise = sample['premise']
+            hypothesis = sample['hypothesis']
+            true_label = sample['label']
+            
+            # Get prediction from pretrained model
+            pred_label = self.predict_single(premise, hypothesis)
+            
+            predictions.append(pred_label)
+            true_labels.append(true_label)
+            
+            # Log progress every 100 samples
+            if (i + 1) % 100 == 0:
+                logger.info(f"Processed {i + 1}/{len(dataset)} samples")
+                
+        # Calculate metrics
+        accuracy = accuracy_score(true_labels, predictions)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            true_labels, predictions, average='weighted', zero_division=0
+        )
+        
+        # Per-class metrics
+        per_class_precision, per_class_recall, per_class_f1, support = precision_recall_fscore_support(
+            true_labels, predictions, average=None, zero_division=0, 
+            labels=['entailment', 'contradiction', 'neutral']
+        )
+        
+        # Confusion matrix
+        cm = confusion_matrix(true_labels, predictions, 
+                            labels=['entailment', 'contradiction', 'neutral'])
+        
+        # Compile results
+        results = {
+            'model_type': 'pretrained_baseline',
+            'model_name': self.model_name,
+            'dataset_name': dataset_name,
+            'num_samples': len(dataset),
+            'accuracy': accuracy,
+            'weighted_precision': precision,
+            'weighted_recall': recall,
+            'weighted_f1': f1,
+            'per_class_metrics': {
+                'entailment': {
+                    'precision': per_class_precision[0],
+                    'recall': per_class_recall[0],
+                    'f1': per_class_f1[0],
+                    'support': support[0]
+                },
+                'contradiction': {
+                    'precision': per_class_precision[1],
+                    'recall': per_class_recall[1],
+                    'f1': per_class_f1[1],
+                    'support': support[1]
+                },
+                'neutral': {
+                    'precision': per_class_precision[2],
+                    'recall': per_class_recall[2],
+                    'f1': per_class_f1[2],
+                    'support': support[2]
+                }
+            },
+            'confusion_matrix': cm.tolist(),
+            'predictions': predictions,
+            'true_labels': true_labels
+        }
+        
+        return results
+        
+    def plot_confusion_matrix(self, results: Dict[str, Any], output_dir: str):
+        """Plot and save confusion matrix."""
+        cm = np.array(results['confusion_matrix'])
+        labels = ['Entailment', 'Contradiction', 'Neutral']
+        
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                   xticklabels=labels, yticklabels=labels)
+        plt.title(f'Confusion Matrix - {results["dataset_name"]} (Baseline)')
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        
+        output_path = os.path.join(output_dir, f'confusion_matrix_{results["dataset_name"]}_baseline.png')
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Confusion matrix saved to {output_path}")
+        
+    def save_results(self, results: Dict[str, Any], output_dir: str):
+        """Save evaluation results to JSON file."""
+        # Remove predictions and true_labels for cleaner JSON (they're large)
+        results_clean = {k: v for k, v in results.items() 
+                        if k not in ['predictions', 'true_labels']}
+        
+        # Convert numpy types to native Python types for JSON serialization
+        results_clean = convert_numpy_types(results_clean)
+        
+        output_path = os.path.join(output_dir, f'baseline_results_{results["dataset_name"]}.json')
+        with open(output_path, 'w') as f:
+            json.dump(results_clean, f, indent=2)
+            
+        logger.info(f"Baseline results saved to {output_path}")
+        
+        # Save detailed predictions
+        predictions_df = pd.DataFrame({
+            'true_label': results['true_labels'],
+            'predicted_label': results['predictions'],
+            'correct': [t == p for t, p in zip(results['true_labels'], results['predictions'])]
+        })
+        
+        predictions_path = os.path.join(output_dir, f'baseline_predictions_{results["dataset_name"]}.csv')
+        predictions_df.to_csv(predictions_path, index=False)
+        logger.info(f"Detailed baseline predictions saved to {predictions_path}")
+        
+    def print_results_summary(self, results: Dict[str, Any]):
+        """Print a summary of evaluation results."""
+        print(f"\n{'='*60}")
+        print(f"BASELINE RESULTS - {results['dataset_name'].upper()}")
+        print(f"Model: {results['model_name']} (Pretrained)")
+        print(f"{'='*60}")
+        print(f"Number of samples: {results['num_samples']}")
+        print(f"Overall Accuracy: {results['accuracy']:.4f}")
+        print(f"Weighted Precision: {results['weighted_precision']:.4f}")
+        print(f"Weighted Recall: {results['weighted_recall']:.4f}")
+        print(f"Weighted F1-Score: {results['weighted_f1']:.4f}")
+        
+        print(f"\nPer-Class Metrics:")
+        print(f"{'Class':<12} {'Precision':<10} {'Recall':<10} {'F1-Score':<10} {'Support':<10}")
+        print("-" * 60)
+        
+        for class_name, metrics in results['per_class_metrics'].items():
+            print(f"{class_name:<12} {metrics['precision']:<10.4f} {metrics['recall']:<10.4f} "
+                  f"{metrics['f1']:<10.4f} {metrics['support']:<10}")
+                  
+        print(f"{'='*60}\n")
+
+def main():
+    parser = argparse.ArgumentParser(description="Evaluate pretrained GPT2-large baseline on MultiNLI")
+    parser.add_argument("--model_name", type=str, default="gpt2-large",
+                       help="Pretrained model name")
+    parser.add_argument("--data_dir", type=str, default="./processed_data",
+                       help="Directory containing processed test datasets")
+    parser.add_argument("--output_dir", type=str, default="./baseline_results",
+                       help="Output directory for baseline evaluation results")
+    
+    args = parser.parse_args()
+    
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Initialize evaluator
+    evaluator = GPT2BaselineEvaluator(args.model_name)
+    evaluator.load_model()
+    
+    # Load test datasets
+    test_datasets = {}
+    for dataset_name in ['test_matched', 'test_mismatched']:
+        dataset_path = os.path.join(args.data_dir, f"{dataset_name}_dataset")
+        if os.path.exists(dataset_path):
+            test_datasets[dataset_name] = load_from_disk(dataset_path)
+            logger.info(f"Loaded {dataset_name}: {len(test_datasets[dataset_name])} samples")
+        else:
+            logger.warning(f"Dataset not found: {dataset_path}")
+    
+    # Evaluate on each test dataset
+    all_results = {}
+    for dataset_name, dataset in test_datasets.items():
+        logger.info(f"Starting baseline evaluation on {dataset_name}...")
+        
+        results = evaluator.evaluate_dataset(dataset, dataset_name)
+        all_results[dataset_name] = results
+        
+        # Print results summary
+        evaluator.print_results_summary(results)
+        
+        # Save results
+        evaluator.save_results(results, args.output_dir)
+        
+        # Plot confusion matrix
+        evaluator.plot_confusion_matrix(results, args.output_dir)
+    
+    # Save combined baseline results
+    combined_results_path = os.path.join(args.output_dir, 'combined_baseline_results.json')
+    combined_results = {k: {kk: vv for kk, vv in v.items() 
+                           if kk not in ['predictions', 'true_labels']} 
+                       for k, v in all_results.items()}
+    
+    # Convert numpy types for JSON serialization
+    combined_results = convert_numpy_types(combined_results)
+    
+    with open(combined_results_path, 'w') as f:
+        json.dump(combined_results, f, indent=2)
+    
+    logger.info(f"Combined baseline results saved to {combined_results_path}")
+    
+    # Print comparison summary
+    if len(all_results) > 1:
+        print(f"\n{'='*80}")
+        print("BASELINE COMPARISON SUMMARY")
+        print(f"{'='*80}")
+        print(f"{'Dataset':<20} {'Accuracy':<12} {'Weighted F1':<12} {'Samples':<10}")
+        print("-" * 80)
+        
+        for dataset_name, results in all_results.items():
+            print(f"{dataset_name:<20} {results['accuracy']:<12.4f} "
+                  f"{results['weighted_f1']:<12.4f} {results['num_samples']:<10}")
+        print(f"{'='*80}")
+
+if __name__ == "__main__":
+    main() 
